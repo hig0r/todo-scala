@@ -1,34 +1,31 @@
 package ninja.higor
-import cats.effect.IO
+import cats.effect.*
 import ninja.higor.models.{CreateTodo, Todo, TodoStatus, UpdateTodo}
 
 import scala.collection.mutable.ListBuffer
 
-case class TodoRepositoryImpl(todos: ListBuffer[Todo]) extends TodoRepository:
+case class TodoRepositoryImpl(nextIdRef: Ref[IO, Int], todosRef: Ref[IO, List[Todo]]) extends TodoRepository:
   override def get(status: Option[TodoStatus]): IO[List[Todo]] =
-    IO.delay {
-      status match
-        case Some(TodoStatus.Completed) => todos.filter(x => x.done).toList
-        case Some(TodoStatus.Active)    => todos.filter(x => !x.done).toList
-        case _                          => todos.toList
-    }
+    status match
+      case Some(TodoStatus.Completed) => todosRef.get.map(_.filter(x => x.done))
+      case Some(TodoStatus.Active)    => todosRef.get.map(_.filter(x => !x.done))
+      case _                          => todosRef.get
 
   override def add(t: CreateTodo): IO[Todo] =
-    IO.delay {
-      val nextId = todos.lastOption match
-        case Some(t) => t.id + 1
-        case None    => 1
-      val todo = Todo(nextId, t.title, t.description, false)
-      todos.append(todo)
-      todo
-    }
+    for {
+      nextId <- nextIdRef.modify(x => (x + 1, x))
+      todo = Todo(nextId, t.title, t.description, false)
+      _ <- todosRef.update(_ :+ todo)
+    } yield todo
 
   override def update(id: Int, t: UpdateTodo): IO[Todo] =
-    IO.delay {
-      val todo = Todo(id, t.title, t.description, t.done)
-      todos.update(todos.indexWhere(x => x.id == id), todo)
-      todo
-    }
+    val todo = Todo(id, t.title, t.description, t.done)
+    todosRef
+      .update { todos =>
+        val i = todos.indexWhere(_.id == id)
+        todos.updated(i, todo)
+      }
+      .map(_ => todo)
 
   override def remove(id: Int): IO[Unit] =
-    IO.delay(todos.filterInPlace(x => x.id != id))
+    todosRef.update(_.filter(_.id != id))
